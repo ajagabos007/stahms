@@ -1,11 +1,10 @@
 
 //< (1)------------------------------Soldier's Details--------------------------------->
 
-String forceNumber, fullName;         // soldiers unique RFID number in hex and fullname
-int BPM ;                             // Heart Beats Per Minutes
-int longitude, latitude ;             // Position; Longitude and latitude
-bool online = false;                   // online status of soldier with default value of false.
-
+String forceNumber, fullName, longitude, latitude ;  // soldiers unique RFID number in hex and fullname
+// Position; Longitude and latitude
+int BPM ;                                            // Heart Beats Per Minutes
+bool online = false;                                 // online status of soldier with default value of false.
 
 //< (1)------------------------------RFID Setup--------------------------------->
 /*
@@ -51,7 +50,6 @@ MFRC522::MIFARE_Key key;
 // Init array that will store new NUID
 byte nuidPICC[4];
 
-
 //< (2) ------------------------------Pulse rate sensor setup--------------------------------->
 
 /*  Getting_BPM_to_Monitor prints the BPM to the Serial Monitor, using the least lines of code and PulseSensor Library.
@@ -76,33 +74,59 @@ int Threshold = 550;           // Determine which Signal to "count as a beat" an
 
 PulseSensorPlayground pulseSensor;  // Creates an instance of the PulseSensorPlayground object called "pulseSensor"
 
+//< (3)------------------------------SIM808 GPS GSM Setup--------------------------------->
+
+#include <SoftwareSerial.h>
+SoftwareSerial sim808(7, 8); // sim808 tx -> arduino pin 7 | sim808 rx -> arduino pin 8
+
+char phoneNumber[] = "+2348030408642"; // replace with your command center phone number.
+String data[5];
+#define DEBUG true
+String state, timegps, message;
+const String googleMap = "http://maps.google.com/maps?q=loc:";
+
 
 void setup() {
 
   Serial.begin(9600);          // For Serial Monitor
 
-  Serial.println("<----- STaHMS - Soldier's Tracking and Health Monitoring System----->");
+  Serial.println("STaHMS - Soldier's Tracking and Health Monitoring System");
 
-  initRFID();
-
-  initPulseRateSensor();
+  //initRFID();
+  //initPulseRateSensor();
+  initSim808();
 
   Serial.println("\n Pleae scan your smart card to come online");
-  
+
 }
 
-
-
 void loop() {
-  RFID();
+  //RFID();
+  online = true;
+
   if (online)
-    Serial.println("Welcome " + forceNumber + ", you are now succesffully online");
+    //Serial.println("Welcome " + forceNumber + ", you are now succesffully online");
 
-  while (online) {
-    bool isPulsePresent = heartBeats();
-    delay(20);                    // considered best practice in a simple sketch.
+    while (online) {
+      readGPS("AT+CGNSINF", 1000, DEBUG);
+      if (state != 0) {
 
-  }
+        Serial.println("State  :" + state);
+        Serial.println("Time  :" + timegps);
+        Serial.println("Latitude  :" + latitude);
+        Serial.println("Longitude  :" + longitude);
+
+        message = googleMap + latitude + "," + longitude;
+
+        //sendSMS(message, phoneNumber);
+
+      } else {
+        Serial.println("GPS Initialising...");
+      }
+      //bool isPulsePresent = heartBeats();
+      delay(20);                    // considered best practice in a simple sketch.
+
+    }
 }
 
 //< ---------------------------------RFID initialization------------------------------------>
@@ -155,14 +179,6 @@ void RFID() {
       nuidPICC[i] = rfid.uid.uidByte[i];
     }
 
-    //    Serial.println(F("The NUID tag is:"));
-    //    Serial.print(F("In hex: "));
-    //    printHex(rfid.uid.uidByte, rfid.uid.size);
-    //    Serial.println();
-    //    Serial.print(F("In dec: "));
-    //    printDec(rfid.uid.uidByte, rfid.uid.size);
-    //    Serial.println();
-
     setForceNumber(rfid.uid.uidByte, rfid.uid.size);
 
   }
@@ -205,7 +221,6 @@ void printDec(byte *buffer, byte bufferSize) {
 
 //< --------------------------Pulse rate sensor initialization---------------------------->
 
-
 void initPulseRateSensor() {
 
   // Configure the PulseSensor object, by assigning our variables to it.
@@ -230,4 +245,89 @@ bool heartBeats() {
     return true;
   }
   return false;
+}
+
+//< --------------------------SIM808 GSM GPS  initialization---------------------------->
+void initSim808() {
+  sim808.begin(9600);
+  delay(50);
+  sim808.print("AT+CSMP=17,167,0,0");  // set this parameter if empty SMS received
+  delay(100);
+  sim808.print("AT+CMGF=1\r");
+  delay(400);
+
+  sendData("AT+CGNSPWR=1", 1000, DEBUG);
+  delay(50);
+  sendData("AT+CGNSSEQ=RMC", 1000, DEBUG);
+  delay(150);
+}
+void readGPS(String command , const int timeout , boolean debug) {
+
+  sim808.println(command);
+  long int time = millis();
+  int i = 0;
+
+  while ((time + timeout) > millis()) {
+    while (sim808.available()) {
+      char c = sim808.read();
+      if (c != ',') {
+        data[i] += c;
+        delay(100);
+      } else {
+        i++;
+      }
+      if (i == 5) {
+        delay(100);
+        goto exitL;
+      }
+    }
+} exitL:
+  if (debug) {
+    state = data[1];
+    timegps = data[2];
+    latitude = data[3];
+    longitude = data[4];
+  }
+}
+
+String sendData (String command , const int timeout , boolean debug) {
+  String response = "";
+  sim808.println(command);
+  long int time = millis();
+  int i = 0;
+
+  while ( (time + timeout ) > millis()) {
+    while (sim808.available()) {
+      char c = sim808.read();
+      response += c;
+    }
+  }
+  if (debug) {
+    Serial.print(response);
+  }
+  return response;
+}
+void sendSMS (String msg, String phoneNo) {
+
+  sim808.print("AT+CMGF=1\r");
+  delay(100);
+
+  sim808.print("AT+CMGS=\"");
+  sim808.print(phoneNo);
+  sim808.println("\"");
+
+  delay(300);
+
+  sim808.print(msg);
+
+  delay(200);
+  sim808.println((char)26); // End AT command with a ^Z, ASCII code 26
+  delay(200);
+  sim808.println();
+  delay(5000); /*minimum delay time for sim808 to processor.
+                  The default delay time is 20000 milliseconds
+                  5000 miliseconds delay time is use due to testing
+*/
+
+  sim808.flush();
 }
